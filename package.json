@@ -1,16 +1,15 @@
 {
-  "name": "pi-acp",
-  "version": "0.0.34",
-  "description": "ACP adapter for pi coding agent",
+  "name": "@jctosta/pi-acp",
+  "version": "0.0.35-bonde.1",
+  "description": "ACP adapter for pi coding agent (Bonde build: adds session cost to usage_update; see https://github.com/svkozak/pi-acp/issues/106)",
   "license": "MIT",
   "author": "Sergii Kozak <svkozak@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "https://github.com/svkozak/pi-acp.git"
+    "url": "git+https://github.com/jctosta/pi-acp.git"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "bugs": {
     "url": "https://github.com/svkozak/pi-acp/issues"
