@@ -70,6 +70,34 @@ function shouldUseShellForPiCommand(cmd) {
   return normalized.endsWith(".cmd") || normalized.endsWith(".bat");
 }
 
+// src/pi-rpc/forward-args.ts
+function getForwardedPiArgs(argv = process.argv.slice(2)) {
+  const out = [];
+  let i = 0;
+  while (i < argv.length) {
+    const arg = argv[i];
+    if (arg === "--") {
+      out.push(...argv.slice(i + 1));
+      break;
+    }
+    if (arg === "--terminal-login" || arg === "--no-themes") {
+      i++;
+      continue;
+    }
+    if (arg === "--mode" || arg === "--session") {
+      i += 2;
+      continue;
+    }
+    if (arg.startsWith("--mode=") || arg.startsWith("--session=")) {
+      i++;
+      continue;
+    }
+    out.push(arg);
+    i++;
+  }
+  return out;
+}
+
 // src/pi-rpc/process.ts
 var PiRpcSpawnError = class extends Error {
   /** Underlying spawn error code, e.g. ENOENT, EACCES */
@@ -130,6 +158,7 @@ var PiRpcProcess = class _PiRpcProcess {
     const cmd = getPiCommand(params.piCommand);
     const args = ["--mode", "rpc", "--no-themes"];
     if (params.sessionPath) args.push("--session", params.sessionPath);
+    args.push(...getForwardedPiArgs());
     const start = shouldUseShellForPiCommand(cmd) ? crossSpawn : spawn;
     const child = start(cmd, args, {
       cwd: params.cwd,
