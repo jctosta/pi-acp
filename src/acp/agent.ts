@@ -1,3 +1,4 @@
+import { todoPlanEntries } from './translate/todo-plan.js'
 import {
   RequestError,
   type Agent as ACPAgent,
@@ -132,6 +133,9 @@ export class PiAcpAgent implements ACPAgent {
   // Remember recent session cwd and use it as the default filter.
   private lastSessionCwd: string | null = null
 
+  // Set by initialize: the client can answer form elicitation requests.
+  private elicitationForm = false
+
   constructor(conn: AgentSideConnection, _config?: unknown) {
     this.conn = conn
     void _config
@@ -215,7 +219,8 @@ export class PiAcpAgent implements ACPAgent {
         mcpServers: opts?.mcpServers ?? [],
         conn: this.conn,
         proc,
-        fileCommands
+        fileCommands,
+        elicitation: this.elicitationForm
       })
 
       this.lastSessionCwd = cwd
@@ -240,6 +245,7 @@ export class PiAcpAgent implements ACPAgent {
     // We currently only support ACP protocol version 1.
     const supportedVersion = 1
     const requested = params.protocolVersion
+    this.elicitationForm = Boolean(params.clientCapabilities?.elicitation?.form)
 
     return {
       protocolVersion: requested === supportedVersion ? requested : supportedVersion,
@@ -287,7 +293,8 @@ export class PiAcpAgent implements ACPAgent {
       mcpServers: params.mcpServers,
       conn: this.conn,
       fileCommands,
-      piCommand: process.env.PI_ACP_PI_COMMAND
+      piCommand: process.env.PI_ACP_PI_COMMAND,
+      elicitation: this.elicitationForm
     })
 
     // Fetch state + models once (parallel) to reduce startup latency.
@@ -1067,6 +1074,14 @@ export class PiAcpAgent implements ACPAgent {
             rawOutput: m
           }
         })
+
+        const planEntries = todoPlanEntries(toolName, m, isError)
+        if (planEntries) {
+          await this.conn.sessionUpdate({
+            sessionId: session.sessionId,
+            update: { sessionUpdate: 'plan', entries: planEntries }
+          })
+        }
       }
     }
 

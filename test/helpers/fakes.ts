@@ -10,6 +10,14 @@ export class FakeAgentSideConnection {
     outcome: { outcome: 'selected', optionId: 'allow' }
   }
 
+  readonly elicitationRequests: unknown[] = []
+  nextElicitationResponse: unknown = { action: 'cancel' }
+
+  async unstable_createElicitation(params: unknown): Promise<any> {
+    this.elicitationRequests.push(params)
+    return this.nextElicitationResponse
+  }
+
   async sessionUpdate(msg: SessionUpdateMsg): Promise<void> {
     this.updates.push(msg)
   }

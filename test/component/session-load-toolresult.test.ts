@@ -66,3 +66,42 @@ test('PiAcpAgent: loadSession replays toolResult as tool_call + tool_call_update
     PiRpcProcess.spawn = originalSpawn
   }
 })
+
+test('PiAcpAgent: loadSession replays a todo toolResult followed by a plan', async () => {
+  const originalSpawn = PiRpcProcess.spawn
+  ;(PiRpcProcess as any).spawn = async () =>
+    ({
+      onEvent: () => () => {},
+      getMessages: async () => ({
+        messages: [
+          {
+            role: 'toolResult',
+            toolCallId: 'call_t',
+            toolName: 'todo',
+            content: [{ type: 'text', text: 'ok' }],
+            details: { tasks: [{ id: 1, subject: 'Do it', status: 'pending' }] },
+            isError: false
+          }
+        ]
+      }),
+      getAvailableThinkingLevels: async () => ['medium'],
+      getAvailableModels: async () => ({ models: [] }),
+      getState: async () => ({ thinkingLevel: 'medium' })
+    }) as any
+
+  try {
+    const conn = new FakeAgentSideConnection()
+    const agent = new PiAcpAgent(asAgentConn(conn))
+    ;(agent as any).store = new FakeStore()
+    await agent.loadSession({ sessionId: 's1', cwd: '/tmp/project', mcpServers: [] } as any)
+
+    const kinds = conn.updates.map(u => (u as any).update.sessionUpdate)
+    const i = kinds.indexOf('tool_call_update')
+    assert.equal(kinds[i + 1], 'plan')
+    assert.deepEqual((conn.updates[i + 1] as any).update.entries, [
+      { content: 'Do it', priority: 'medium', status: 'pending' }
+    ])
+  } finally {
+    PiRpcProcess.spawn = originalSpawn
+  }
+})

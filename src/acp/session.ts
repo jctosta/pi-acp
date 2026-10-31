@@ -33,6 +33,8 @@ import {
   isBashTool
 } from './translate/bash.js'
 import { toolResultToText } from './translate/pi-tools.js'
+import { dialogElicitation, dialogResponse, type PiDialog } from './translate/extension-dialogs.js'
+import { todoPlanEntries } from './translate/todo-plan.js'
 
 type SessionCreateParams = {
   cwd: string
@@ -40,6 +42,8 @@ type SessionCreateParams = {
   conn: AgentSideConnection
   fileCommands?: import('./slash-commands.js').FileSlashCommand[]
   piCommand?: string
+  /** Client advertised `clientCapabilities.elicitation.form`. */
+  elicitation?: boolean
 }
 
 export type StopReason = 'end_turn' | 'cancelled' | 'error'
@@ -251,7 +255,8 @@ export class SessionManager {
       proc,
       conn: params.conn,
       fileCommands: params.fileCommands ?? [],
-      autoTitle: true
+      autoTitle: true,
+      elicitation: params.elicitation
     })
 
     this.sessions.set(sessionId, session)
@@ -279,7 +284,8 @@ export class SessionManager {
       proc: params.proc,
       conn: params.conn,
       fileCommands: params.fileCommands ?? [],
-      autoTitle: false
+      autoTitle: false,
+      elicitation: params.elicitation
     })
 
     this.sessions.set(sessionId, session)
@@ -326,6 +332,7 @@ export class PiAcpSession {
   private fileMutationToolCallIds = new Set<string>()
   private bashToolCallIds = new Set<string>()
   private bashOutputSnapshots = new Map<string, string>()
+  private readonly elicitation: boolean
 
   // Ensure `session/update` notifications are sent in order and can be awaited
   // before completing a `session/prompt` request.
@@ -339,6 +346,7 @@ export class PiAcpSession {
     conn: AgentSideConnection
     fileCommands?: FileSlashCommand[]
     autoTitle?: boolean
+    elicitation?: boolean
   }) {
     this.sessionId = opts.sessionId
     this.cwd = opts.cwd
@@ -347,6 +355,7 @@ export class PiAcpSession {
     this.conn = opts.conn
     this.fileCommands = opts.fileCommands ?? []
     this.initialTitlePending = opts.autoTitle ?? false
+    this.elicitation = opts.elicitation ?? false
 
     this.proc.onEvent(ev => this.handlePiEvent(ev))
   }
@@ -899,6 +908,9 @@ export class PiAcpSession {
           ...(hasStructuredDiff ? {} : { rawOutput: result })
         })
 
+        const planEntries = todoPlanEntries(String((ev as any).toolName ?? ''), result, isError)
+        if (planEntries) this.emit({ sessionUpdate: 'plan', entries: planEntries })
+
         this.cleanupToolCall(toolCallId)
         break
       }
@@ -988,6 +1000,14 @@ export class PiAcpSession {
       return
     }
 
+    if (
+      this.elicitation &&
+      (method === 'select' || method === 'confirm' || method === 'input' || method === 'editor')
+    ) {
+      await this.handleExtensionDialog(ev, id, method)
+      return
+    }
+
     if (method === 'select') {
       await this.handleExtensionSelect(ev, id)
       return
@@ -1021,6 +1041,32 @@ export class PiAcpSession {
     }
 
     await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+  }
+
+  // pi's `timeout` on select, confirm and input: SDK 0.26 has no request cancellation, so we cannot
+  // withdraw the question when pi times out; a late answer goes to an id pi no longer waits for and is ignored.
+  private async handleExtensionDialog(ev: PiRpcEvent, id: string, method: PiDialog['method']): Promise<void> {
+    const title = stringProp(ev, 'title') ?? `Pi ${method}`
+    let dialog: PiDialog
+    if (method === 'select') {
+      const options = Array.isArray(ev.options) ? ev.options.map(o => String(o)) : []
+      if (!options.length) {
+        await this.proc.sendExtensionUiResponse({ id, cancelled: true })
+        return
+      }
+      dialog = { method, id, title, options }
+    } else if (method === 'confirm') {
+      dialog = { method, id, title, message: stringProp(ev, 'message') ?? undefined }
+    } else if (method === 'input') {
+      dialog = { method, id, title, placeholder: stringProp(ev, 'placeholder') ?? undefined }
+    } else {
+      dialog = { method, id, title, prefill: stringProp(ev, 'prefill') ?? undefined }
+    }
+
+    const reply = await this.conn
+      .unstable_createElicitation(dialogElicitation(this.sessionId, dialog))
+      .catch(() => null)
+    await this.proc.sendExtensionUiResponse(dialogResponse(dialog, reply))
   }
 
   private async handleExtensionSelect(ev: PiRpcEvent, id: string): Promise<void> {
