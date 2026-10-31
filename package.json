@@ -1,7 +1,7 @@
 {
   "name": "@jctosta/pi-acp",
-  "version": "0.0.35-bonde.2",
-  "description": "ACP adapter for pi coding agent (Bonde build: adds session cost to usage_update and forwards CLI args to pi; see https://github.com/svkozak/pi-acp/issues/106)",
+  "version": "0.0.35-bonde.3",
+  "description": "ACP adapter for pi coding agent (Bonde build: adds session cost to usage_update, forwards CLI args to pi, shows pi dialogs as form elicitation and rpiv-todo lists as plans; see https://github.com/svkozak/pi-acp/issues/106)",
   "license": "MIT",
   "author": "Sergii Kozak <svkozak@gmail.com>",
   "repository": {

@@ -18,6 +18,8 @@ Expect some minor breaking changes.
   - Relative file paths from pi are resolved against the session cwd before being emitted as ACP tool locations, which enables follow-along features in clients like Zed
   - For `edit`, `pi-acp` attempts to infer a 1-based line number from a unique `oldText` match in the pre-edit file snapshot and includes it in the emitted tool location when possible
   - For `edit`, `pi-acp` snapshots the file before the tool runs and emits an ACP **structured diff** (`oldText`/`newText`) on completion when possible
+- pi extension dialogs (`select`, `confirm`, `input`, `editor`) become ACP form `elicitation/create` requests when the client advertises `clientCapabilities.elicitation.form`; decline or cancel returns `cancelled` to pi. Other clients keep the permission-request mapping. Hints ride in `_meta.piAcp` (`multiline`, `placeholder`)
+- `todo` results from the `@juicesharp/rpiv-todo` extension become ACP `plan` updates (live and on `session/load`); deleted tasks are dropped
 - Session persistence
   - pi stores its own sessions in `~/.pi/agent/sessions/...`
   - `pi-acp` stores a small mapping file at `~/.pi/pi-acp/session-map.json` so `session/load` can reattach to a previous pi session file

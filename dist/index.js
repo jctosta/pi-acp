@@ -3,6 +3,22 @@
 // src/index.ts
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
 
+// src/acp/translate/todo-plan.ts
+var STATUSES = /* @__PURE__ */ new Set(["pending", "in_progress", "completed"]);
+function todoPlanEntries(toolName, result, isError) {
+  if (toolName !== "todo" || isError) return null;
+  const details = result?.details;
+  if (!details || typeof details !== "object" || details.error) return null;
+  const tasks = details.tasks;
+  if (!Array.isArray(tasks)) return null;
+  const entries = [];
+  for (const t of tasks) {
+    if (typeof t?.subject !== "string" || !STATUSES.has(t.status)) continue;
+    entries.push({ content: t.subject, priority: "medium", status: t.status });
+  }
+  return entries;
+}
+
 // src/acp/agent.ts
 import {
   RequestError as RequestError3
@@ -665,6 +681,82 @@ ${stderr}`);
   }
 }
 
+// src/acp/translate/extension-dialogs.ts
+function splitDialogTitle(title) {
+  const m = /\r?\n[ \t]*\r?\n/.exec(title);
+  if (!m) return { message: title, detail: null };
+  const detail = title.slice(m.index + m[0].length).trim();
+  return { message: title.slice(0, m.index), detail: detail || null };
+}
+function dialogElicitation(sessionId, dialog) {
+  const { message, detail } = splitDialogTitle(dialog.title);
+  const description = detail ?? void 0;
+  const form = (properties, required) => ({
+    mode: "form",
+    sessionId,
+    message,
+    requestedSchema: { type: "object", properties, ...required ? { required } : {} }
+  });
+  switch (dialog.method) {
+    case "select":
+      return form(
+        {
+          choice: {
+            type: "string",
+            description,
+            oneOf: dialog.options.map((o, i) => ({ const: String(i), title: o }))
+          }
+        },
+        ["choice"]
+      );
+    case "confirm":
+      return form(
+        {
+          confirmed: {
+            type: "boolean",
+            description: [detail, dialog.message].filter(Boolean).join("\n\n") || void 0
+          }
+        },
+        ["confirmed"]
+      );
+    case "input":
+      return form({
+        value: {
+          type: "string",
+          description,
+          ...dialog.placeholder ? { _meta: { piAcp: { placeholder: dialog.placeholder } } } : {}
+        }
+      });
+    case "editor":
+      return form({
+        value: {
+          type: "string",
+          description,
+          default: dialog.prefill ?? "",
+          _meta: { piAcp: { multiline: true } }
+        }
+      });
+  }
+}
+function dialogResponse(dialog, reply) {
+  const { id } = dialog;
+  const cancelled = { id, cancelled: true };
+  if (!reply || reply.action !== "accept") return cancelled;
+  const content = reply.content ?? {};
+  switch (dialog.method) {
+    case "select": {
+      const choice = content.choice;
+      const i = typeof choice === "string" && /^\d+$/.test(choice) ? Number(choice) : -1;
+      const value = dialog.options[i];
+      return value === void 0 ? cancelled : { id, value };
+    }
+    case "confirm":
+      return typeof content.confirmed === "boolean" ? { id, confirmed: content.confirmed } : cancelled;
+    default:
+      return { id, value: typeof content.value === "string" ? content.value : "" };
+  }
+}
+
 // src/acp/session.ts
 var CONFIRM_PERMISSION_OPTIONS = [
   { optionId: "yes", name: "Yes", kind: "allow_once" },
@@ -812,7 +904,8 @@ var SessionManager = class {
       proc,
       conn: params.conn,
       fileCommands: params.fileCommands ?? [],
-      autoTitle: true
+      autoTitle: true,
+      elicitation: params.elicitation
     });
     this.sessions.set(sessionId, session);
     return session;
@@ -836,7 +929,8 @@ var SessionManager = class {
       proc: params.proc,
       conn: params.conn,
       fileCommands: params.fileCommands ?? [],
-      autoTitle: false
+      autoTitle: false,
+      elicitation: params.elicitation
     });
     this.sessions.set(sessionId, session);
     return session;
@@ -875,6 +969,7 @@ var PiAcpSession = class {
   fileMutationToolCallIds = /* @__PURE__ */ new Set();
   bashToolCallIds = /* @__PURE__ */ new Set();
   bashOutputSnapshots = /* @__PURE__ */ new Map();
+  elicitation;
   // Ensure `session/update` notifications are sent in order and can be awaited
   // before completing a `session/prompt` request.
   lastEmit = Promise.resolve();
@@ -886,6 +981,7 @@ var PiAcpSession = class {
     this.conn = opts.conn;
     this.fileCommands = opts.fileCommands ?? [];
     this.initialTitlePending = opts.autoTitle ?? false;
+    this.elicitation = opts.elicitation ?? false;
     this.proc.onEvent((ev) => this.handlePiEvent(ev));
   }
   setStartupInfo(text) {
@@ -1309,6 +1405,8 @@ var PiAcpSession = class {
           content,
           ...hasStructuredDiff ? {} : { rawOutput: result }
         });
+        const planEntries = todoPlanEntries(String(ev.toolName ?? ""), result, isError);
+        if (planEntries) this.emit({ sessionUpdate: "plan", entries: planEntries });
         this.cleanupToolCall(toolCallId);
         break;
       }
@@ -1382,6 +1480,10 @@ var PiAcpSession = class {
     if (!id) {
       return;
     }
+    if (this.elicitation && (method === "select" || method === "confirm" || method === "input" || method === "editor")) {
+      await this.handleExtensionDialog(ev, id, method);
+      return;
+    }
     if (method === "select") {
       await this.handleExtensionSelect(ev, id);
       return;
@@ -1411,6 +1513,28 @@ var PiAcpSession = class {
       return;
     }
     await this.proc.sendExtensionUiResponse({ id, cancelled: true });
+  }
+  // pi's `timeout` on select, confirm and input: SDK 0.26 has no request cancellation, so we cannot
+  // withdraw the question when pi times out; a late answer goes to an id pi no longer waits for and is ignored.
+  async handleExtensionDialog(ev, id, method) {
+    const title = stringProp(ev, "title") ?? `Pi ${method}`;
+    let dialog;
+    if (method === "select") {
+      const options = Array.isArray(ev.options) ? ev.options.map((o) => String(o)) : [];
+      if (!options.length) {
+        await this.proc.sendExtensionUiResponse({ id, cancelled: true });
+        return;
+      }
+      dialog = { method, id, title, options };
+    } else if (method === "confirm") {
+      dialog = { method, id, title, message: stringProp(ev, "message") ?? void 0 };
+    } else if (method === "input") {
+      dialog = { method, id, title, placeholder: stringProp(ev, "placeholder") ?? void 0 };
+    } else {
+      dialog = { method, id, title, prefill: stringProp(ev, "prefill") ?? void 0 };
+    }
+    const reply = await this.conn.unstable_createElicitation(dialogElicitation(this.sessionId, dialog)).catch(() => null);
+    await this.proc.sendExtensionUiResponse(dialogResponse(dialog, reply));
   }
   async handleExtensionSelect(ev, id) {
     const rawOptions = ev.options;
@@ -1997,6 +2121,8 @@ var PiAcpAgent = class {
   }
   // Remember recent session cwd and use it as the default filter.
   lastSessionCwd = null;
+  // Set by initialize: the client can answer form elicitation requests.
+  elicitationForm = false;
   constructor(conn, _config) {
     this.conn = conn;
     void _config;
@@ -2059,7 +2185,8 @@ var PiAcpAgent = class {
         mcpServers: opts?.mcpServers ?? [],
         conn: this.conn,
         proc,
-        fileCommands
+        fileCommands,
+        elicitation: this.elicitationForm
       });
       this.lastSessionCwd = cwd;
       this.store.upsert({ sessionId, cwd, sessionFile: stored.sessionFile });
@@ -2077,6 +2204,7 @@ var PiAcpAgent = class {
   async initialize(params) {
     const supportedVersion = 1;
     const requested = params.protocolVersion;
+    this.elicitationForm = Boolean(params.clientCapabilities?.elicitation?.form);
     return {
       protocolVersion: requested === supportedVersion ? requested : supportedVersion,
       agentInfo: {
@@ -2118,7 +2246,8 @@ var PiAcpAgent = class {
       mcpServers: params.mcpServers,
       conn: this.conn,
       fileCommands,
-      piCommand: process.env.PI_ACP_PI_COMMAND
+      piCommand: process.env.PI_ACP_PI_COMMAND,
+      elicitation: this.elicitationForm
     });
     let state = null;
     let availableModels = null;
@@ -2728,6 +2857,13 @@ ${JSON.stringify(stats, null, 2)}`;
             rawOutput: m
           }
         });
+        const planEntries = todoPlanEntries(toolName, m, isError);
+        if (planEntries) {
+          await this.conn.sessionUpdate({
+            sessionId: session.sessionId,
+            update: { sessionUpdate: "plan", entries: planEntries }
+          });
+        }
       }
     }
     const response = {
