@@ -312,6 +312,9 @@ export class PiAcpSession {
   // Applies to the currently running turn.
   private cancelRequested = false
 
+  // The provider error of the last low-level run, when pi will not retry it. Reset when a turn starts.
+  private runError: string | null = null
+
   // Current in-flight turn (if any). Additional prompts are queued.
   private pendingTurn: PendingTurn | null = null
   private readonly turnQueue: QueuedTurn[] = []
@@ -534,7 +537,12 @@ export class PiAcpSession {
     await this.publishContextUsage()
 
     const reason: StopReason = this.cancelRequested ? 'cancelled' : 'end_turn'
-    this.pendingTurn?.resolve(reason)
+    const error = this.cancelRequested ? null : this.runError
+    this.runError = null
+    if (error) {
+      const errorKind = /\b429\b|rate.?limit|too many requests/i.test(error) ? 'rate_limit' : 'provider_error'
+      this.pendingTurn?.reject(RequestError.internalError({ errorKind }, error))
+    } else this.pendingTurn?.resolve(reason)
     this.pendingTurn = null
     this.inAgentLoop = false
 
@@ -610,6 +618,7 @@ export class PiAcpSession {
 
   private startTurn(t: QueuedTurn): void {
     this.cancelRequested = false
+    this.runError = null
     this.inAgentLoop = false
 
     this.pendingTurn = { title: t.title, resolve: t.resolve, reject: t.reject }
@@ -980,6 +989,12 @@ export class PiAcpSession {
         // One low-level run ended. Pi may still retry, compact, or process a queued
         // continuation, so keep the ACP turn open until `agent_settled`.
         this.inAgentLoop = false
+        const messages = Array.isArray((ev as any).messages) ? (ev as any).messages : []
+        const last = [...messages].reverse().find((m: any) => m?.role === 'assistant')
+        this.runError =
+          (ev as any).willRetry !== true && last?.stopReason === 'error' && typeof last.errorMessage === 'string'
+            ? last.errorMessage
+            : null
         break
       }
 
