@@ -251,6 +251,11 @@ var PiRpcProcess = class _PiRpcProcess {
     const res = await this.request({ type: "prompt", message, images });
     if (!res.success) throw new Error(`pi prompt failed: ${res.error ?? JSON.stringify(res.data)}`);
   }
+  /** Queue a message into the running turn (pi delivers it after the current tool calls). */
+  async steer(message, images = []) {
+    const res = await this.request({ type: "steer", message, images });
+    if (!res.success) throw new Error(`pi steer failed: ${res.error ?? JSON.stringify(res.data)}`);
+  }
   async abort() {
     const res = await this.request({ type: "abort" });
     if (!res.success) throw new Error(`pi abort failed: ${res.error ?? JSON.stringify(res.data)}`);
@@ -1025,6 +1030,12 @@ var PiAcpSession = class {
       this.startTurn(queued);
     });
     return turnPromise;
+  }
+  /** Deliver a message into the running turn. Returns false when no turn runs (nothing is sent). */
+  async steer(message, images = []) {
+    if (!this.pendingTurn) return false;
+    await this.proc.steer(expandSlashCommand(message, this.fileCommands), images);
+    return true;
   }
   async cancel() {
     this.cancelRequested = true;
@@ -2223,6 +2234,8 @@ var PiAcpAgent = class {
         title: "pi ACP adapter",
         version: pkg.version ?? "0.0.0"
       },
+      // ACP steering extension: this agent handles `_session/steering` (see extMethod).
+      _meta: { steering: { supported: true } },
       // Zed currently uses ClientCapabilities._meta["terminal-auth"] to decide whether to show
       // the "Authenticate" banner/button. If not supported, we still return the method for the registry.
       authMethods: getAuthMethods({
@@ -2365,6 +2378,25 @@ var PiAcpAgent = class {
   }
   async authenticate(_params) {
     return;
+  }
+  /** ACP steering extension, same contract as claude-agent-acp and codex-acp. */
+  async extMethod(method, params) {
+    if (method !== "_session/steering") throw RequestError3.methodNotFound(method);
+    const { sessionId, prompt, _meta } = params;
+    if (typeof sessionId !== "string" || sessionId.length === 0)
+      throw RequestError3.invalidParams(void 0, "steer params require a non-empty sessionId");
+    if (!Array.isArray(prompt) || prompt.length === 0)
+      throw RequestError3.invalidParams(void 0, "steer params require a non-empty prompt array");
+    const idleBehavior = _meta && typeof _meta === "object" ? _meta.steering?.idleBehavior : void 0;
+    if (idleBehavior !== void 0 && idleBehavior !== "promptRequired")
+      throw RequestError3.invalidParams(void 0, "unsupported steering idleBehavior");
+    const session = await this.restoreSession(sessionId);
+    const { message, images } = promptToPiMessage(prompt);
+    if (await session.steer(message, images)) return { outcome: "injected" };
+    if (idleBehavior === "promptRequired") return { outcome: "promptRequired", reason: "noRunningTurn" };
+    this.prompt({ sessionId, prompt }).catch(() => {
+    });
+    return { outcome: "startedNewTurn" };
   }
   async prompt(params) {
     const session = await this.restoreSession(params.sessionId);

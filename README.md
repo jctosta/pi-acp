@@ -20,6 +20,7 @@ Expect some minor breaking changes.
   - For `edit`, `pi-acp` snapshots the file before the tool runs and emits an ACP **structured diff** (`oldText`/`newText`) on completion when possible
 - pi extension dialogs (`select`, `confirm`, `input`, `editor`) become ACP form `elicitation/create` requests when the client advertises `clientCapabilities.elicitation.form`; decline or cancel returns `cancelled` to pi. Other clients keep the permission-request mapping. Hints ride in `_meta.piAcp` (`multiline`, `placeholder`)
 - `todo` results from the `@juicesharp/rpiv-todo` extension become ACP `plan` updates (live and on `session/load`); deleted tasks are dropped
+- `_session/steering` (ACP steering extension, advertised as `_meta.steering.supported` in `initialize`) delivers a message into the running turn through pi's `steer` command; with `idleBehavior: "promptRequired"` an idle session answers `promptRequired` instead of starting a turn
 - A provider error from pi (bad key, rate limit) ends the prompt with an ACP internal error (-32603) whose `data.errorKind` is `provider_error` or `rate_limit`, instead of a quiet `end_turn`
 - Session persistence
   - pi stores its own sessions in `~/.pi/agent/sessions/...`

@@ -1,7 +1,7 @@
 {
   "name": "@jctosta/pi-acp",
-  "version": "0.0.35-bonde.4",
-  "description": "ACP adapter for pi coding agent (Bonde build: adds session cost to usage_update, forwards CLI args to pi, shows pi dialogs as form elicitation and rpiv-todo lists as plans and passes pi's provider error as an ACP error; see https://github.com/svkozak/pi-acp/issues/106)",
+  "version": "0.0.35-bonde.5",
+  "description": "ACP adapter for pi coding agent (Bonde build: adds session cost to usage_update, forwards CLI args to pi, shows pi dialogs as form elicitation and rpiv-todo lists as plans and passes pi's provider error as an ACP error and takes mid-turn messages through _session/steering; see https://github.com/svkozak/pi-acp/issues/106)",
   "license": "MIT",
   "author": "Sergii Kozak <svkozak@gmail.com>",
   "repository": {
