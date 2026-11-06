@@ -32,6 +32,7 @@ function stripAnsi(s: string): string {
 type PiRpcCommand =
   | { type: 'prompt'; id?: string; message: string; images?: unknown[] }
   | { type: 'abort'; id?: string }
+  | { type: 'steer'; id?: string; message: string; images?: unknown[] }
   | { type: 'get_state'; id?: string }
   // Model
   | { type: 'get_available_models'; id?: string }
@@ -261,6 +262,12 @@ export class PiRpcProcess {
   async prompt(message: string, images: unknown[] = []): Promise<void> {
     const res = await this.request({ type: 'prompt', message, images })
     if (!res.success) throw new Error(`pi prompt failed: ${res.error ?? JSON.stringify(res.data)}`)
+  }
+
+  /** Queue a message into the running turn (pi delivers it after the current tool calls). */
+  async steer(message: string, images: unknown[] = []): Promise<void> {
+    const res = await this.request({ type: 'steer', message, images })
+    if (!res.success) throw new Error(`pi steer failed: ${res.error ?? JSON.stringify(res.data)}`)
   }
 
   async abort(): Promise<void> {

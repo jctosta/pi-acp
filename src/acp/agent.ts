@@ -254,6 +254,8 @@ export class PiAcpAgent implements ACPAgent {
         title: 'pi ACP adapter',
         version: pkg.version ?? '0.0.0'
       },
+      // ACP steering extension: this agent handles `_session/steering` (see extMethod).
+      _meta: { steering: { supported: true } },
       // Zed currently uses ClientCapabilities._meta["terminal-auth"] to decide whether to show
       // the "Authenticate" banner/button. If not supported, we still return the method for the registry.
       authMethods: getAuthMethods({
@@ -451,6 +453,29 @@ export class PiAcpAgent implements ACPAgent {
     // Terminal Auth is handled out-of-band by re-launching the binary with `--terminal-login`.
     // If the client calls `authenticate` anyway, we can no-op successfully.
     return
+  }
+
+  /** ACP steering extension, same contract as claude-agent-acp and codex-acp. */
+  async extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (method !== '_session/steering') throw RequestError.methodNotFound(method)
+
+    const { sessionId, prompt, _meta } = params as { sessionId?: unknown; prompt?: unknown; _meta?: any }
+    if (typeof sessionId !== 'string' || sessionId.length === 0)
+      throw RequestError.invalidParams(undefined, 'steer params require a non-empty sessionId')
+    if (!Array.isArray(prompt) || prompt.length === 0)
+      throw RequestError.invalidParams(undefined, 'steer params require a non-empty prompt array')
+    const idleBehavior = _meta && typeof _meta === 'object' ? _meta.steering?.idleBehavior : undefined
+    if (idleBehavior !== undefined && idleBehavior !== 'promptRequired')
+      throw RequestError.invalidParams(undefined, 'unsupported steering idleBehavior')
+
+    const session = await this.restoreSession(sessionId)
+    const { message, images } = promptToPiMessage(prompt as PromptRequest['prompt'])
+    if (await session.steer(message, images)) return { outcome: 'injected' }
+    if (idleBehavior === 'promptRequired') return { outcome: 'promptRequired', reason: 'noRunningTurn' }
+
+    // Like claude: no turn runs and the client did not opt out, so start one, detached.
+    this.prompt({ sessionId, prompt } as PromptRequest).catch(() => {})
+    return { outcome: 'startedNewTurn' }
   }
 
   async prompt(params: PromptRequest): Promise<PromptResponse> {

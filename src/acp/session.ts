@@ -421,6 +421,13 @@ export class PiAcpSession {
     return turnPromise
   }
 
+  /** Deliver a message into the running turn. Returns false when no turn runs (nothing is sent). */
+  async steer(message: string, images: unknown[] = []): Promise<boolean> {
+    if (!this.pendingTurn) return false
+    await this.proc.steer(expandSlashCommand(message, this.fileCommands), images)
+    return true
+  }
+
   async cancel(): Promise<void> {
     // Cancel current and clear any queued prompts.
     this.cancelRequested = true

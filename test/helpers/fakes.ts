@@ -58,6 +58,12 @@ export class FakePiRpcProcess {
     this.prompts.push({ message, attachments })
   }
 
+  readonly steers: Array<{ message: string; attachments: unknown[] }> = []
+
+  async steer(message: string, attachments: unknown[] = []): Promise<void> {
+    this.steers.push({ message, attachments })
+  }
+
   async abort(): Promise<void> {
     this.abortCount += 1
   }
